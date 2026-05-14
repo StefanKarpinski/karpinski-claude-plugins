@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""process-probe — credential-safe process probing.
+
+Usage:
+  process-probe <subcommand> [args...]
+  process-probe --help
+
+Subcommands:
+  env-keys    <pid>              List the names of every env var the process inherited.
+  env-values  <pid> NAME...      Read explicit env vars; sensitive ones auto-redact.
+                                 Per-name override: --unsafe-show NAME.
+  cmdline     <pid>              Print argv (one element per line) with secret-flag /
+                                 secret-value redaction. --unsafe bypasses both layers.
+  info        <pid>              ps summary as a single JSON object.
+  fds         <pid>              Open file descriptors as JSONL (one object per fd).
+  network     <pid>              TCP/UDP connections as JSONL (one object per socket).
+
+All subcommands accept `--help` for full detail.
+
+See the process-probe SKILL.md for the credential-safety rationale, the
+secret-detection heuristics, and the PreToolUse hook that blocks direct
+reads of /proc/<pid>/{environ,cmdline}.
+"""
+
+import os
+import sys
+
+SUBCOMMANDS = ("env-keys", "env-values", "cmdline", "info", "fds", "network")
+
+_HERE = os.path.dirname(os.path.realpath(__file__))
+LIBEXEC = os.path.normpath(os.path.join(_HERE, "..", "libexec"))
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args:
+        sys.stderr.write(__doc__)
+        return 2
+    if args[0] in {"-h", "--help"}:
+        sys.stdout.write(__doc__)
+        return 0
+
+    sub = args[0]
+    if sub not in SUBCOMMANDS:
+        sys.stderr.write(f"process-probe: unknown subcommand {sub!r}\n")
+        sys.stderr.write(f"valid subcommands: {', '.join(SUBCOMMANDS)}\n")
+        return 2
+
+    target = os.path.join(LIBEXEC, sub)
+    if not os.access(target, os.X_OK):
+        sys.stderr.write(f"process-probe: helper not found or not executable: {target}\n")
+        return 1
+
+    # Replace this process with the subcommand. Signals and exit codes
+    # then propagate naturally; the dispatcher leaves no trace in the
+    # process tree.
+    os.execv(target, [sub] + args[1:])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

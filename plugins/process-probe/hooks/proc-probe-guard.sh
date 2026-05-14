@@ -62,15 +62,16 @@ These paths leak process credentials when filtered with anything less
 than a whitelist (the 2026-05-13 OBSIDIAN_PASSWORD incident is what
 this guard exists to prevent).
 
-Use the vetted helpers in  instead:
+Use the vetted `process-probe` command instead (the plugin puts it on
+your PATH; run `process-probe --help` for the full list):
 
-  env-keys <pid>                        # list var NAMES, no values
-  env-values <pid> NAME...              # explicit reads, sensitive auto-redacted
-  env-values <pid> --unsafe-show NAME   # opt-in raw value, audit-trail in transcript
-  cmdline <pid>                         # argv with secret-flag values redacted
-  info <pid>                            # ps state, no creds
-  fds <pid>                             # open fds, sockets summarized
-  network <pid>                         # TCP/UDP connections only
+  process-probe env-keys <pid>                         # list var NAMES, no values
+  process-probe env-values <pid> NAME...               # explicit reads, sensitive auto-redacted
+  process-probe env-values <pid> --unsafe-show NAME    # opt-in raw value, audit-trail in transcript
+  process-probe cmdline <pid>                          # argv with secret-flag values redacted
+  process-probe info <pid>                             # ps state, no creds
+  process-probe fds <pid>                              # open fds, sockets summarized
+  process-probe network <pid>                          # TCP/UDP connections only
 
 See the process-probe SKILL.md for the full rationale and the
 sensitive-name pattern.
