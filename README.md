@@ -30,17 +30,17 @@ Credential-safe helpers for inspecting a running process — environment variabl
 
 Why it exists: ad-hoc redaction (e.g., a one-line `sed` filter over `/proc/<pid>/environ`) is one regex bug away from emitting credentials in clear into the conversation transcript. This plugin replaces the unsafe path with a vetted command (whitelist-style redaction by variable name *and* by value shape) and a tool-call hook that blocks the unsafe path entirely.
 
-After install, the plugin puts a single command on your PATH: **`process-probe`**, with six subcommands.
+After install, the plugin puts a single command on your PATH: **`process-probe`**, with six subcommands. All output is JSON or JSONL — one line per record for list-shaped commands.
 
 ```sh
 process-probe --help                                  # list subcommands
-process-probe env-keys <pid>                          # var NAMES (no values)
-process-probe env-values <pid> NAME...                # explicit reads; sensitive auto-redact
+process-probe env-keys <pid>                          # JSONL: {"name": "..."} per env var
+process-probe env-values <pid> NAME...                # JSONL: per-name {"value"} / {"redacted"} / {"unset"}
 process-probe env-values <pid> --unsafe-show NAME     # per-name override (auditable)
-process-probe cmdline <pid>                           # argv, secret-flag/-shape values redacted
+process-probe cmdline <pid>                           # JSONL: per-argv {"index", "value"?, "redacted"?}
 process-probe info <pid>                              # one JSON object: ps summary
 process-probe fds <pid>                               # JSONL: open file descriptors
-process-probe network <pid>                          # JSONL: TCP/UDP connections
+process-probe network <pid>                           # JSONL: TCP/UDP connections
 ```
 
 The `PreToolUse` hook fires automatically across Bash, Read, Edit, Write, and NotebookEdit — any tool call referencing `/proc/<real-pid>/environ` or `/proc/<real-pid>/cmdline` is blocked with a pointer back to `process-probe`.

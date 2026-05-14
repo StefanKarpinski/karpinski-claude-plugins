@@ -23,11 +23,13 @@ Use these helpers whenever investigating a running process — debugging, diagno
 
 All take a single `<pid>` argument unless noted. All exit non-zero on missing-process / permission-denied; stderr explains.
 
+All subcommands emit JSON or JSONL. The convention across the suite: present fields signal state; absent fields are not "null", they're "not applicable here".
+
 | Subcommand | Output | What it does |
 | --- | --- | --- |
-| `process-probe env-keys <pid>` | one name per line | List the *names* of every env var the process inherited. No values printed. |
-| `process-probe env-values <pid> NAME...` | `NAME=value` per line | Read explicit env vars by name. Each requested name prints as `NAME=<value>` by default; if the NAME matches a sensitive-name keyword OR the VALUE matches a credential-shape / entropy gate, it prints as `NAME=<redacted: REASON>` instead (REASON is `sensitive name` or `sensitive value`). Per-name override via `--unsafe-show NAME` — see "Override semantics" below. |
-| `process-probe cmdline <pid>` | one argv element per line | Print argv with two-layer redaction: (1) tokens following secret-flag patterns (`--password`, `--token`, `--api-key`, `-p`, `-k`, …) become `<redacted: secret flag>`, and `--flag=value` forms become `--flag=<redacted: secret flag>`; (2) any remaining element that matches the shared value-shape heuristic (known credential formats like `sk-…`/`ghp_…`/`AKIA…`/JWT/PEM, or length+entropy gate) becomes `<redacted: secret value>`. `--unsafe` bypasses both layers. |
+| `process-probe env-keys <pid>` | JSONL: `{"name": "..."}` per line | Sorted list of env var names the process inherited. No values. |
+| `process-probe env-values <pid> NAME...` | JSONL: one of three shapes per requested name | Three mutually-exclusive states: `{"name": "X", "value": "v"}` (emitted), `{"name": "X", "redacted": "REASON"}` (held back; REASON is `sensitive name` or `sensitive value`), or `{"name": "X", "unset": true}` (not in env). Per-name override: `--unsafe-show NAME` makes that name print with `value` even if it would have been redacted. |
+| `process-probe cmdline <pid>` | JSONL: `{"index": N, ...}` per argv element | Each element gets `value` or `redacted` (or both, for the partial-redact case): full-emit `{"index": 0, "value": "my-app"}`; next-token redact `{"index": 2, "redacted": "secret flag"}` (the previous token was `--token`/`--password`/…); value-shape redact `{"index": 6, "redacted": "secret value"}` (matches sk-…/ghp_…/AKIA…/JWT/PEM or the length+entropy gate); partial redact `{"index": 7, "value": "--api-key=", "redacted": "secret flag"}` for the `--flag=value` form (flag prefix kept, value half held). `--unsafe` bypasses both layers. |
 | `process-probe info <pid>` | one JSON object | `ps` summary: `pid`, `state`, `pcpu_percent`, `rss_kb`, `user`, `elapsed_seconds`, `command`, `started`. Username is resolved via `/proc/PID/status` + `pwd` to avoid `ps`'s 8-char truncation. |
 | `process-probe fds <pid>` | JSONL, one object per fd | Open file descriptors: `{"fd": N, "kind": "REG"\|"DIR"\|"CHAR"\|"FIFO"\|"UNIX"\|"SOCKET"\|"ANON"\|"PIPE"\|"OTHER", "target": "..."}`. `target` is omitted for SOCKET entries (use `network` for per-connection info). To get counts by kind, aggregate after reading. |
 | `process-probe network <pid>` | JSONL, one object per connection | `{"protocol": "tcp"\|"udp", "state": "ESTAB"\|"LISTEN"\|…, "local": "addr:port", "peer": "addr:port", "recv_q": N, "send_q": N}`. Uses `ss -tunp` on Linux; falls back to `lsof -nP -i -a -p` (which omits `recv_q`/`send_q` because lsof doesn't expose them). |
@@ -49,44 +51,47 @@ Examples use placeholder values — PID `12345`, username `alice`, `user@example
 
 ```sh
 $ process-probe env-keys 12345
-HOME
-LANG
-OBSIDIAN_EMAIL
-OBSIDIAN_PASSWORD
-OBSIDIAN_SYNC_DIR
-OBSIDIAN_VAULT_NAME
-OBSIDIAN_VAULT_PASSWORD
-PATH
-USER
+{"name": "HOME"}
+{"name": "LANG"}
+{"name": "OBSIDIAN_EMAIL"}
+{"name": "OBSIDIAN_PASSWORD"}
+{"name": "OBSIDIAN_SYNC_DIR"}
+{"name": "OBSIDIAN_VAULT_NAME"}
+{"name": "OBSIDIAN_VAULT_PASSWORD"}
+{"name": "PATH"}
+{"name": "USER"}
 ```
 
 **`env-values`** — read specific ones; sensitive vars auto-redact, mix is fine:
 
 ```sh
 $ process-probe env-values 12345 \
-    OBSIDIAN_VAULT_NAME OBSIDIAN_SYNC_DIR OBSIDIAN_PASSWORD OBSIDIAN_EMAIL
-OBSIDIAN_VAULT_NAME=MyVault
-OBSIDIAN_SYNC_DIR=/home/alice/MyVault
-OBSIDIAN_PASSWORD=<redacted: sensitive name>
-OBSIDIAN_EMAIL=user@example.com
+    OBSIDIAN_VAULT_NAME OBSIDIAN_SYNC_DIR OBSIDIAN_PASSWORD OBSIDIAN_EMAIL MISSING
+{"name": "OBSIDIAN_VAULT_NAME", "value": "MyVault"}
+{"name": "OBSIDIAN_SYNC_DIR", "value": "/home/alice/MyVault"}
+{"name": "OBSIDIAN_PASSWORD", "redacted": "sensitive name"}
+{"name": "OBSIDIAN_EMAIL", "value": "user@example.com"}
+{"name": "MISSING", "unset": true}
 ```
 
 See "Override semantics" below for the per-name `--unsafe-show` flag.
 
-**`cmdline`** — argv with secret-flag values redacted; one argument per line:
+**`cmdline`** — argv with secret-flag and secret-shape redaction:
 
 ```sh
-# A process started with `my-app --token <SECRET> --port 8080 sk-ant-api03-...`:
+# A process started as: my-app --token SECRET --port 8080 sk-ant-api03-... --api-key=K positional
 $ process-probe cmdline 12345
-my-app
---token
-<redacted: secret flag>
---port
-8080
-<redacted: secret value>
+{"index": 0, "value": "my-app"}
+{"index": 1, "value": "--token"}
+{"index": 2, "redacted": "secret flag"}
+{"index": 3, "value": "--port"}
+{"index": 4, "value": "8080"}
+{"index": 5, "redacted": "secret value"}
+{"index": 6, "value": "--api-key=", "redacted": "secret flag"}
+{"index": 7, "value": "positional"}
 ```
 
-The first redaction was triggered by the `--token` flag pattern; the second by the value-shape heuristic catching a positional `sk-ant-…` credential.
+Index 2's redaction was triggered by the `--token` flag pattern (the previous element). Index 5 was caught by the value-shape heuristic spotting a positional `sk-ant-…` credential. Index 6 is the partial-redact form: the flag prefix (`--api-key=`) is kept in `value`, the value half is held back via `redacted`.
 
 **`info`** — single JSON object:
 
@@ -134,15 +139,16 @@ When you need an env var's value, **always** go through both stages:
 ```sh
 # Stage 1
 process-probe env-keys 12345
-# → see that OBSIDIAN_VAULT_NAME, OBSIDIAN_SYNC_DIR, OBSIDIAN_PASSWORD, ... are all set.
+# → JSONL of {"name": "..."} — see what's there.
 
 # Stage 2: request only what you need.
 process-probe env-values 12345 OBSIDIAN_VAULT_NAME OBSIDIAN_SYNC_DIR
-# → values printed.
+# → {"name": "OBSIDIAN_VAULT_NAME", "value": "MyVault"}
+#   {"name": "OBSIDIAN_SYNC_DIR", "value": "/home/alice/MyVault"}
 
 # Trying to read a sensitive var (intentional):
 process-probe env-values 12345 OBSIDIAN_PASSWORD
-# → OBSIDIAN_PASSWORD=<redacted: sensitive name>
+# → {"name": "OBSIDIAN_PASSWORD", "redacted": "sensitive name"}
 ```
 
 ### Override semantics: `--unsafe-show NAME` is per-name, not global
@@ -152,13 +158,13 @@ By default, every requested variable prints — sensitive ones (by name OR value
 ```sh
 # Default behavior — sensitive ones redact, non-sensitive ones print clean.
 process-probe env-values 12345 OBSIDIAN_VAULT_NAME OBSIDIAN_PASSWORD
-# OBSIDIAN_VAULT_NAME=MyVault
-# OBSIDIAN_PASSWORD=<redacted: sensitive name>
+# {"name": "OBSIDIAN_VAULT_NAME", "value": "MyVault"}
+# {"name": "OBSIDIAN_PASSWORD", "redacted": "sensitive name"}
 
 # Bypass for ONE specific name only:
 process-probe env-values 12345 OBSIDIAN_VAULT_NAME OBSIDIAN_PASSWORD --unsafe-show OBSIDIAN_PASSWORD
-# OBSIDIAN_VAULT_NAME=MyVault
-# OBSIDIAN_PASSWORD=<actual value>
+# {"name": "OBSIDIAN_VAULT_NAME", "value": "MyVault"}
+# {"name": "OBSIDIAN_PASSWORD", "value": "<actual value>"}
 
 # To bypass multiple, repeat the flag:
 process-probe env-values 12345 --unsafe-show TOKEN_A --unsafe-show TOKEN_B

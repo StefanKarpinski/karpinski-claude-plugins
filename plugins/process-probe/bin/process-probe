@@ -5,12 +5,17 @@ Usage:
   process-probe <subcommand> [args...]
   process-probe --help
 
-Subcommands:
-  env-keys    <pid>              List the names of every env var the process inherited.
-  env-values  <pid> NAME...      Read explicit env vars; sensitive ones auto-redact.
-                                 Per-name override: --unsafe-show NAME.
-  cmdline     <pid>              Print argv (one element per line) with secret-flag /
-                                 secret-value redaction. --unsafe bypasses both layers.
+All output is JSON or JSONL. Subcommands:
+
+  env-keys    <pid>              List env var names — JSONL of {"name": ...}.
+  env-values  <pid> NAME...      Read explicit env vars — JSONL of
+                                 {"name", "value"}, {"name", "redacted": REASON},
+                                 or {"name", "unset": true}. Per-name override:
+                                 --unsafe-show NAME.
+  cmdline     <pid>              Argv as JSONL with per-element redaction:
+                                 {"index", "value"} / {"index", "redacted": REASON}
+                                 / partial: {"index", "value": "--flag=", "redacted"}.
+                                 --unsafe bypasses both redaction layers.
   info        <pid>              ps summary as a single JSON object.
   fds         <pid>              Open file descriptors as JSONL (one object per fd).
   network     <pid>              TCP/UDP connections as JSONL (one object per socket).

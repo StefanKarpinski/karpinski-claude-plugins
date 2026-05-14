@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
 """env-values <pid> <var-name>... — read specific env var values for a process.
 
-Stage 2 of the two-stage probe. Caller must name each variable explicitly;
-unlisted vars are not emitted. Values are emitted as `<redacted: REASON>`
-when either the variable NAME matches a credential-suggesting pattern
-(password, secret, token, key, credential, auth, session, cookie, …) OR
-the VALUE matches a known credential format / is long-and-high-entropy.
+Output: JSONL. One object per requested name, in three mutually-exclusive
+shapes (presence of fields signals state):
+
+  {"name": "X", "value": "v"}             # non-sensitive, emitted
+  {"name": "X", "redacted": "REASON"}     # sensitive, value held back
+  {"name": "X", "unset": true}            # name not in the process's env
+
+REASON is "sensitive name" (variable name matches a credential-suggesting
+pattern) or "sensitive value" (value matches a known credential format /
+length-and-entropy gate).
+
+Stage 2 of the two-stage probe. Caller must name each variable
+explicitly; unlisted vars are not emitted.
 
 If you absolutely need to see a redacted value, invoke with
 `--unsafe-show <var>` for each such variable. That bypasses the
 redaction for those names only; the request appears in the transcript so
-the choice is auditable.
+the choice is auditable, and the entry then prints as
+`{"name": "X", "value": "v"}` even if it would have been redacted.
 
 See _secret_heuristics.py for the patterns and rationale.
 """
 
+import json
 import os
 import sys
 
@@ -81,14 +91,14 @@ def main() -> int:
 
     for name in wanted:
         if name not in env:
-            print(f"{name}=<unset>")
+            print(json.dumps({"name": name, "unset": True}))
             continue
         value = env[name]
         reason = redaction_reason(name, value)
         if reason and name not in unsafe_show:
-            print(f"{name}=<redacted: {reason}>")
+            print(json.dumps({"name": name, "redacted": reason}))
         else:
-            print(f"{name}={value}")
+            print(json.dumps({"name": name, "value": value}))
 
     return 0
 
