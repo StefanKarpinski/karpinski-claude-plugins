@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""cmdline <pid> — print a process's argv, one argument per line.
+
+Output format: one argv element per line, in order. Spaces and quotes
+inside a single argv element are preserved literally (no shell escaping)
+so consumers parsing line-by-line can read each element verbatim. The
+argv-zero (basename or path of the program) is the first line.
+
+Redaction (two layers; both fire by default):
+
+1. SECRET-FLAG redaction. Tokens following a credential-flag pattern
+   (`--password`, `--passwd`, `--pass`, `--secret`, `--token`,
+   `--bearer`, `--api-key`, `--access-token`, `--id-token`,
+   `--auth-token`, `--client-secret`, `--cookie`, `--session`,
+   `--private-key`, `--key-file`, `-p`, `-k`) are emitted as
+   `<redacted: secret flag>`. The `--flag=value` form is redacted to
+   `--flag=<redacted: secret flag>`.
+
+2. SECRET-VALUE redaction. Each remaining argv element is checked
+   against the shared `looks_like_secret_value` heuristic (known
+   credential formats: sk-..., ghp_..., AKIA..., JWT, PEM private
+   keys, etc.; plus a length+charset+entropy gate). Matches are
+   emitted as `<redacted: secret value>`. This catches credentials
+   passed as positional arguments (e.g. `my-app sk-ant-api03-...`).
+
+To inspect the raw argv (only when you have a real reason), pass
+`--unsafe`. The flag appears in the transcript so the bypass is
+auditable.
+
+See _secret_heuristics.py for the shared value-shape detector.
+"""
+
+import os
+import re
+import sys
+
+_HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, _HERE)
+from _secret_heuristics import looks_like_secret_value  # noqa: E402
+
+
+# Argv flags that historically introduce a secret as the next token.
+# Match is whole-token, case-insensitive.
+SECRET_FLAG_PATTERN = re.compile(
+    r"^(-[pPkK]|"
+    r"--password|--passwd|--pass|"
+    r"--secret|--token|--bearer|"
+    r"--api[-_]?key|--auth[-_]?token|--access[-_]?token|--id[-_]?token|"
+    r"--client[-_]?secret|"
+    r"--cookie|--session|"
+    r"--private[-_]?key|--key[-_]?file)$",
+    re.IGNORECASE,
+)
+
+SECRET_FLAG_EQ_PATTERN = re.compile(
+    r"^(-[pPkK]|"
+    r"--password|--passwd|--pass|"
+    r"--secret|--token|--bearer|"
+    r"--api[-_]?key|--auth[-_]?token|--access[-_]?token|--id[-_]?token|"
+    r"--client[-_]?secret|"
+    r"--cookie|--session|"
+    r"--private[-_]?key|--key[-_]?file)=",
+    re.IGNORECASE,
+)
+
+
+def redact_argv(argv: list[str]) -> list[str]:
+    out: list[str] = []
+    consume_next = False
+    for arg in argv:
+        if consume_next:
+            out.append("<redacted: secret flag>")
+            consume_next = False
+            continue
+        if SECRET_FLAG_PATTERN.match(arg):
+            out.append(arg)
+            consume_next = True
+            continue
+        m = SECRET_FLAG_EQ_PATTERN.match(arg)
+        if m:
+            out.append(f"{m.group(0)}<redacted: secret flag>")
+            continue
+        # Fall through to value-shape detection (covers positional
+        # credentials and unknown-flag-name conventions).
+        if looks_like_secret_value(arg):
+            out.append("<redacted: secret value>")
+            continue
+        out.append(arg)
+    return out
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args or args[0] in {"-h", "--help"}:
+        sys.stderr.write(__doc__)
+        return 2
+
+    unsafe = False
+    if "--unsafe" in args:
+        unsafe = True
+        args = [a for a in args if a != "--unsafe"]
+
+    if len(args) != 1:
+        sys.stderr.write("expected a single pid argument\n")
+        return 2
+
+    pid = args[0]
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            data = f.read()
+    except FileNotFoundError:
+        sys.stderr.write(f"no such process: {pid}\n")
+        return 1
+    except PermissionError:
+        sys.stderr.write(f"permission denied reading cmdline of pid {pid}\n")
+        return 1
+
+    argv = [a.decode("utf-8", errors="replace") for a in data.split(b"\0") if a]
+    if not unsafe:
+        argv = redact_argv(argv)
+
+    for a in argv:
+        print(a)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

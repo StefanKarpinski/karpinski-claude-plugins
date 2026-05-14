@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""env-values <pid> <var-name>... — read specific env var values for a process.
+
+Stage 2 of the two-stage probe. Caller must name each variable explicitly;
+unlisted vars are not emitted. Values are emitted as `<redacted: REASON>`
+when either the variable NAME matches a credential-suggesting pattern
+(password, secret, token, key, credential, auth, session, cookie, …) OR
+the VALUE matches a known credential format / is long-and-high-entropy.
+
+If you absolutely need to see a redacted value, invoke with
+`--unsafe-show <var>` for each such variable. That bypasses the
+redaction for those names only; the request appears in the transcript so
+the choice is auditable.
+
+See _secret_heuristics.py for the patterns and rationale.
+"""
+
+import os
+import sys
+
+# Pull in shared heuristics. The module sits beside this script.
+_HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, _HERE)
+from _secret_heuristics import redaction_reason  # noqa: E402
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args or args[0] in {"-h", "--help"}:
+        sys.stderr.write(__doc__)
+        return 2
+
+    pid = args[0]
+    args = args[1:]
+
+    requested: list[str] = []
+    unsafe_show: set[str] = set()
+
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--unsafe-show":
+            i += 1
+            if i >= len(args):
+                sys.stderr.write("--unsafe-show requires a variable name\n")
+                return 2
+            unsafe_show.add(args[i])
+        else:
+            requested.append(a)
+        i += 1
+
+    if not requested and not unsafe_show:
+        sys.stderr.write("name at least one variable to read\n")
+        return 2
+
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            data = f.read()
+    except FileNotFoundError:
+        sys.stderr.write(f"no such process: {pid}\n")
+        return 1
+    except PermissionError:
+        sys.stderr.write(f"permission denied reading env of pid {pid} (different user?)\n")
+        return 1
+
+    env: dict[str, str] = {}
+    for entry in data.split(b"\0"):
+        if not entry:
+            continue
+        name, _, value = entry.partition(b"=")
+        try:
+            env[name.decode("utf-8")] = value.decode("utf-8")
+        except UnicodeDecodeError:
+            env[name.decode("utf-8", errors="replace")] = value.decode(
+                "utf-8", errors="replace"
+            )
+
+    # Combined wanted set, preserving order: explicit reads first, then
+    # any --unsafe-show names not already in the list.
+    wanted = list(dict.fromkeys(requested + sorted(unsafe_show)))
+
+    for name in wanted:
+        if name not in env:
+            print(f"{name}=<unset>")
+            continue
+        value = env[name]
+        reason = redaction_reason(name, value)
+        if reason and name not in unsafe_show:
+            print(f"{name}=<redacted: {reason}>")
+        else:
+            print(f"{name}={value}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""env-keys <pid> — list environment variable NAMES for a running process.
+
+Names only. No values. Safe to invoke without credential-exposure risk.
+Use this as stage 1 of a two-stage probe: see which env vars are set,
+then ask `env-values` for specific names you care about.
+"""
+
+import os
+import sys
+
+
+def main() -> int:
+    if len(sys.argv) != 2 or sys.argv[1] in {"-h", "--help"}:
+        sys.stderr.write(__doc__)
+        return 2
+
+    pid = sys.argv[1]
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            data = f.read()
+    except FileNotFoundError:
+        sys.stderr.write(f"no such process: {pid}\n")
+        return 1
+    except PermissionError:
+        sys.stderr.write(f"permission denied reading env of pid {pid} (different user?)\n")
+        return 1
+
+    keys = []
+    for entry in data.split(b"\0"):
+        if not entry:
+            continue
+        name, _, _ = entry.partition(b"=")
+        try:
+            keys.append(name.decode("utf-8"))
+        except UnicodeDecodeError:
+            keys.append(name.decode("utf-8", errors="replace"))
+
+    for k in sorted(set(keys)):
+        print(k)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

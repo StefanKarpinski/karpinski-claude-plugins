@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""network <pid> — TCP/UDP connections as JSONL (one object per socket).
+
+Each line is a JSON object with these fields:
+
+  protocol  str   — "tcp" or "udp"
+  state     str   — "ESTAB", "LISTEN", "UNCONN", "TIME-WAIT", etc.
+  local     str   — local address:port
+  peer      str   — peer address:port (or "*:*" for listeners)
+  recv_q    int   — receive queue depth (omitted for the lsof fallback)
+  send_q    int   — send queue depth (omitted for the lsof fallback)
+
+Prefers `ss -tunp` (Linux iproute2). Falls back to `lsof -nP -i -a -p`
+on systems without `ss`. Both backends parse to the same JSON schema;
+the lsof fallback drops the queue-depth fields because lsof doesn't
+expose them.
+
+No credential exposure risk.
+"""
+
+import json
+import re
+import shutil
+import subprocess
+import sys
+
+
+# `ss` line format (with -H to suppress header):
+#   <Netid> <State> <Recv-Q> <Send-Q> <Local> <Peer> users:((...))...
+# We index by position; the trailing process info column can vary in
+# count but always comes after position 5.
+_PID_FIELD = re.compile(r"pid=(\d+)")
+
+
+def via_ss(pid: str) -> tuple[int, list[dict[str, object]]]:
+    if not shutil.which("ss"):
+        return 127, []
+    out = subprocess.run(
+        # -t TCP, -u UDP, -n no-resolve, -p show pid, -H no header,
+        # plus state filters so we see established, listening, and any
+        # transient state.
+        ["ss", "-tunp", "-H",
+         "state", "established",
+         "state", "listening",
+         "state", "syn-sent",
+         "state", "syn-recv",
+         "state", "close-wait",
+         "state", "time-wait",
+         "state", "fin-wait-1",
+         "state", "fin-wait-2"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if out.returncode != 0:
+        sys.stderr.write(out.stderr)
+        return out.returncode, []
+    result: list[dict[str, object]] = []
+    for line in out.stdout.splitlines():
+        m = _PID_FIELD.search(line)
+        if not m or m.group(1) != pid:
+            continue
+        parts = line.split(maxsplit=6)
+        if len(parts) < 6:
+            continue
+        result.append({
+            "protocol": parts[0],
+            "state": parts[1],
+            "recv_q": int(parts[2]),
+            "send_q": int(parts[3]),
+            "local": parts[4],
+            "peer": parts[5],
+        })
+    return 0, result
+
+
+# lsof IPv4/IPv6 NAME column shapes:
+#   "TCP 192.168.1.5:53086->104.26.0.147:443 (ESTABLISHED)"
+#   "TCP *:8080 (LISTEN)"
+#   "UDP 192.168.1.5:5353"                                   (no state)
+_LSOF_NAME = re.compile(
+    r"^(?P<proto>\w+)\s+(?P<local>\S+?)(?:->(?P<peer>\S+))?(?:\s+\((?P<state>[^)]+)\))?\s*$"
+)
+
+
+def via_lsof(pid: str) -> tuple[int, list[dict[str, object]]]:
+    if not shutil.which("lsof"):
+        return 127, []
+    out = subprocess.run(
+        ["lsof", "-nP", "-i", "-a", "-p", pid],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    # lsof exits 1 when there are no matches; treat as no-rows.
+    if out.returncode not in (0, 1):
+        sys.stderr.write(out.stderr)
+        return out.returncode, []
+    result: list[dict[str, object]] = []
+    for line in out.stdout.splitlines()[1:]:  # skip header
+        parts = line.split(None, 8)
+        if len(parts) < 9:
+            continue
+        name = parts[8]
+        m = _LSOF_NAME.match(name)
+        if not m:
+            continue
+        proto = m.group("proto").lower()
+        local = m.group("local")
+        peer = m.group("peer") or "*:*"
+        state = m.group("state") or ""
+        result.append({
+            "protocol": proto,
+            "state": state,
+            "local": local,
+            "peer": peer,
+        })
+    return 0, result
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args or args[0] in {"-h", "--help"}:
+        sys.stderr.write(__doc__)
+        return 2
+    if len(args) != 1:
+        sys.stderr.write("expected a single pid argument\n")
+        return 2
+
+    pid = args[0]
+    rc, rows = via_ss(pid)
+    if rc == 127:
+        rc, rows = via_lsof(pid)
+        if rc == 127:
+            sys.stderr.write("neither ss nor lsof is installed\n")
+            return 1
+    if rc != 0:
+        return rc
+
+    for row in rows:
+        print(json.dumps(row))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

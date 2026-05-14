@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""fds <pid> — open file descriptors as JSONL (one object per fd).
+
+Each line is a JSON object with these fields:
+
+  fd      int   — file descriptor number
+  kind    str   — one of REG, DIR, CHAR, FIFO, UNIX, SOCKET, ANON, PIPE, OTHER
+  target  str   — readlink target (REG/DIR/CHAR/FIFO/UNIX/ANON/PIPE only;
+                  omitted for SOCKET since the inode reveals no useful
+                  per-fd information — use `network` for connections).
+
+To compute counts by kind, aggregate after reading. No credential
+exposure risk.
+"""
+
+import json
+import os
+import stat as st_mod
+import sys
+
+
+def fd_target(pid: str, fd: str) -> str:
+    try:
+        return os.readlink(f"/proc/{pid}/fd/{fd}")
+    except OSError as e:
+        return f"<unreadable: {e}>"
+
+
+def classify(target: str) -> str:
+    if target.startswith("socket:"):
+        return "SOCKET"
+    if target.startswith("anon_inode:"):
+        return "ANON"
+    if target.startswith("pipe:"):
+        return "PIPE"
+    if target.startswith("/"):
+        try:
+            mode = os.stat(target).st_mode
+            if st_mod.S_ISREG(mode):
+                return "REG"
+            if st_mod.S_ISDIR(mode):
+                return "DIR"
+            if st_mod.S_ISCHR(mode):
+                return "CHAR"
+            if st_mod.S_ISFIFO(mode):
+                return "FIFO"
+            if st_mod.S_ISSOCK(mode):
+                return "UNIX"
+            return "OTHER"
+        except OSError:
+            return "REG"
+    return "OTHER"
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args or args[0] in {"-h", "--help"}:
+        sys.stderr.write(__doc__)
+        return 2
+    if len(args) != 1:
+        sys.stderr.write("expected a single pid argument\n")
+        return 2
+
+    pid = args[0]
+    fd_dir = f"/proc/{pid}/fd"
+    try:
+        fds = sorted(os.listdir(fd_dir), key=lambda x: int(x) if x.isdigit() else -1)
+    except FileNotFoundError:
+        sys.stderr.write(f"no such process: {pid}\n")
+        return 1
+    except PermissionError:
+        sys.stderr.write(f"permission denied reading fds of pid {pid}\n")
+        return 1
+
+    for fd in fds:
+        target = fd_target(pid, fd)
+        kind = classify(target)
+        obj: dict[str, object] = {"fd": int(fd), "kind": kind}
+        if kind != "SOCKET":
+            obj["target"] = target
+        print(json.dumps(obj))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

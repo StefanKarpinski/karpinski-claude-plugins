@@ -1,0 +1,8 @@
+{
+  "name": "process-probe",
+  "description": "Credential-safe process probing: vetted helpers for env vars / argv / fds / network plus a PreToolUse hook blocking raw /proc/<pid>/{environ,cmdline} reads.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Stefan Karpinski"
+  }
+}

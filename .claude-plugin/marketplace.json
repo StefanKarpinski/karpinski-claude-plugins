@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "karpinski-claude-plugins",
+  "description": "Personal collection of Claude Code plugins.",
+  "owner": {
+    "name": "Stefan Karpinski"
+  },
+  "plugins": [
+    {
+      "name": "process-probe",
+      "description": "Credential-safe helpers for inspecting a running process — env vars, argv, file descriptors, network connections — paired with a PreToolUse hook that blocks direct reads of /proc/<pid>/environ and /proc/<pid>/cmdline. The helpers redact values whose name matches a credential keyword OR whose value matches a known credential shape (sk-…, ghp_…, AKIA…, JWT, PEM, etc.) or a length-and-entropy gate, with per-name --unsafe-show overrides that are auditable in the transcript.",
+      "author": {
+        "name": "Stefan Karpinski"
+      },
+      "category": "security",
+      "source": "./plugins/process-probe"
+    }
+  ]
+}

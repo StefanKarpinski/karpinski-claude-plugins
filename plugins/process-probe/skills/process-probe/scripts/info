@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""info <pid> — basic process info as JSONL (one object).
+
+Wraps `ps`. Emits a single JSON object on stdout with these fields:
+
+  pid              int     — process id
+  state            str     — ps STAT code (e.g. "S", "Sl+", "R", "Z")
+  pcpu_percent     float   — instantaneous CPU%
+  rss_kb           int     — resident set size in kilobytes
+  user             str     — process owner username
+  elapsed_seconds  int     — seconds since process start
+  command          str     — basename of the executable
+  started          str     — wall-clock start time (locale-formatted)
+
+No credential exposure risk.
+"""
+
+import json
+import pwd
+import subprocess
+import sys
+
+
+def lookup_user(pid: str) -> str:
+    """Read /proc/PID/status for the effective UID, resolve to username.
+    Avoids the 8-character truncation `ps` defaults to."""
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            for line in f:
+                if line.startswith("Uid:"):
+                    uid = int(line.split()[1])  # real uid
+                    try:
+                        return pwd.getpwuid(uid).pw_name
+                    except KeyError:
+                        return str(uid)
+    except OSError:
+        pass
+    return ""
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args or args[0] in {"-h", "--help"}:
+        sys.stderr.write(__doc__)
+        return 2
+    if len(args) != 1:
+        sys.stderr.write("expected a single pid argument\n")
+        return 2
+
+    pid = args[0]
+    # Field list: every column is a single whitespace-free token except
+    # `lstart` (which contains spaces). Put `lstart` last so we can
+    # `split(maxsplit=6)` and grab the remainder as one piece.
+    field_spec = "pid=,stat=,pcpu=,rss=,etimes=,comm=,lstart="
+    try:
+        result = subprocess.run(
+            ["ps", "-o", field_spec, "-p", pid],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        sys.stderr.write("ps not found in PATH\n")
+        return 1
+
+    line = result.stdout.strip()
+    if result.returncode != 0 or not line:
+        sys.stderr.write(f"no such process: {pid}\n")
+        return 1
+
+    parts = line.split(maxsplit=6)
+    if len(parts) < 7:
+        sys.stderr.write(f"unexpected ps output: {line!r}\n")
+        return 1
+
+    p_pid, state, pcpu, rss, etimes, comm, lstart = parts
+    print(json.dumps({
+        "pid": int(p_pid),
+        "state": state,
+        "pcpu_percent": float(pcpu),
+        "rss_kb": int(rss),
+        "user": lookup_user(pid),
+        "elapsed_seconds": int(etimes),
+        "command": comm,
+        "started": lstart,
+    }))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

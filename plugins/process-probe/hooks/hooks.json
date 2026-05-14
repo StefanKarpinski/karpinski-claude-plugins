@@ -1,0 +1,16 @@
+{
+  "description": "Block direct reads of /proc/<pid>/environ or /proc/<pid>/cmdline across Bash, Read, Edit, Write, and NotebookEdit. Use the helpers in skills/process-probe/scripts/ instead.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/proc-probe-guard.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
