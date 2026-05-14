@@ -1,6 +1,6 @@
 ---
 name: process-probe
-description: Inspect a running process — its command line, environment variables, file descriptors, and network connections — through credential-safe helpers in ${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/. Never read /proc/PID/environ or /proc/PID/cmdline directly; the proc-probe-guard.sh PreToolUse hook blocks those reads across Bash, Read, Edit, Write, and NotebookEdit. The helpers redact values when either the variable name matches a sensitive-name keyword (password, secret, token, key, …) or the value matches a known credential shape (sk-…, ghp_…, AKIA…, JWT, PEM private key) or a length+entropy gate. A two-stage env workflow (list keys first, then explicitly request specific values) is the canonical entry point. Use this skill for any process probing — debugging a hang, diagnosing why something is stuck, checking what arguments or environment a daemon was started with, exploring file descriptors or network connections — even when the specific operation isn't itself credential-sensitive (the goal is one central, judgment-call-free place for all process probing).
+description: Inspect a running process — its command line, environment variables, file descriptors, and network connections — through credential-safe helpers (env-keys, env-values, cmdline, info, fds, network) that this plugin puts on your PATH. Never read /proc/PID/environ or /proc/PID/cmdline directly; the proc-probe-guard.sh PreToolUse hook blocks those reads across Bash, Read, Edit, Write, and NotebookEdit. The helpers redact values when either the variable name matches a sensitive-name keyword (password, secret, token, key, …) or the value matches a known credential shape (sk-…, ghp_…, AKIA…, JWT, PEM private key) or a length+entropy gate. A two-stage env workflow (list keys first, then explicitly request specific values) is the canonical entry point. Use this skill for any process probing — debugging a hang, diagnosing why something is stuck, checking what arguments or environment a daemon was started with, exploring file descriptors or network connections — even when the specific operation isn't itself credential-sensitive (the goal is one central, judgment-call-free place for all process probing).
 ---
 
 # Process-probe
@@ -36,7 +36,7 @@ All take a single `<pid>` argument unless noted. All exit non-zero on missing-pr
 
 `info`, `fds`, and `network` wrap `ps`, `lsof`, and `ss` — tools that aren't themselves credential-bearing. They live in this skill anyway for a few reasons:
 
-1. **All process probing routes through one place.** "Need to know something about a running process? → use `${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/`" replaces "decide whether this particular question needs the safe path or whether the raw tool is fine" — a judgment call that's easy to get wrong and is the kind of mistake this skill exists to prevent.
+1. **All process probing routes through one place.** "Need to know something about a running process? → use ``" replaces "decide whether this particular question needs the safe path or whether the raw tool is fine" — a judgment call that's easy to get wrong and is the kind of mistake this skill exists to prevent.
 2. **Cross-platform smoothing.** The wrappers paper over per-system tool variation (`ss` vs `lsof`, `ps` field-format differences, Linux vs macOS), so you can probe processes on different systems the same way.
 3. **Machine-readable output.** They produce JSON / JSONL, so the result is easy to parse, pipe through `jq`, or feed back into another tool.
 4. **Future hook point.** If a field on `ps` / `ss` / `lsof` output ever becomes sensitive, there's one place to add redaction or filtering — no need to update every call site.
@@ -48,7 +48,7 @@ Examples use placeholder values — PID `12345`, username `alice`, `user@example
 **`env-keys`** — what env vars does this process have?
 
 ```sh
-$ ${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/env-keys 12345
+$ env-keys 12345
 HOME
 LANG
 OBSIDIAN_EMAIL
@@ -63,7 +63,7 @@ USER
 **`env-values`** — read specific ones; sensitive vars auto-redact, mix is fine:
 
 ```sh
-$ ${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/env-values 12345 \
+$ env-values 12345 \
     OBSIDIAN_VAULT_NAME OBSIDIAN_SYNC_DIR OBSIDIAN_PASSWORD OBSIDIAN_EMAIL
 OBSIDIAN_VAULT_NAME=MyVault
 OBSIDIAN_SYNC_DIR=/home/alice/MyVault
@@ -77,7 +77,7 @@ See "Override semantics" below for the per-name `--unsafe-show` flag.
 
 ```sh
 # A process started with `my-app --token <SECRET> --port 8080 sk-ant-api03-...`:
-$ ${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/cmdline 12345
+$ cmdline 12345
 my-app
 --token
 <redacted: secret flag>
@@ -91,14 +91,14 @@ The first redaction was triggered by the `--token` flag pattern; the second by t
 **`info`** — single JSON object:
 
 ```sh
-$ ${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/info 12345
+$ info 12345
 {"pid": 12345, "state": "Sl+", "pcpu_percent": 0.0, "rss_kb": 23724, "user": "alice", "elapsed_seconds": 98504, "command": "my-daemon", "started": "Tue May 12 15:26:18 2026"}
 ```
 
 **`fds`** — JSONL, one open file descriptor per line:
 
 ```sh
-$ ${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/fds 12345 | head -8
+$ fds 12345 | head -8
 {"fd": 0, "kind": "CHAR", "target": "/dev/pts/5"}
 {"fd": 1, "kind": "CHAR", "target": "/dev/pts/5"}
 {"fd": 2, "kind": "CHAR", "target": "/dev/pts/5"}
@@ -108,7 +108,7 @@ $ ${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/fds 12345 | head -8
 {"fd": 9, "kind": "SOCKET"}
 
 # Aggregate by kind (consumers compute their own summaries):
-$ ${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/fds 12345 | jq -r '.kind' | sort | uniq -c
+$ fds 12345 | jq -r '.kind' | sort | uniq -c
       3 ANON
       3 CHAR
       3 REG
@@ -118,7 +118,7 @@ $ ${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/fds 12345 | jq -r '.kind' |
 **`network`** — JSONL, one connection per line:
 
 ```sh
-$ ${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/network 12345
+$ network 12345
 {"protocol": "tcp", "state": "ESTAB", "recv_q": 0, "send_q": 0, "local": "192.0.2.10:53086", "peer": "198.51.100.42:443"}
 ```
 
@@ -133,15 +133,15 @@ When you need an env var's value, **always** go through both stages:
 
 ```sh
 # Stage 1
-${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/env-keys 12345
+env-keys 12345
 # → see that OBSIDIAN_VAULT_NAME, OBSIDIAN_SYNC_DIR, OBSIDIAN_PASSWORD, ... are all set.
 
 # Stage 2: request only what you need.
-${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/env-values 12345 OBSIDIAN_VAULT_NAME OBSIDIAN_SYNC_DIR
+env-values 12345 OBSIDIAN_VAULT_NAME OBSIDIAN_SYNC_DIR
 # → values printed.
 
 # Trying to read a sensitive var (intentional):
-${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/env-values 12345 OBSIDIAN_PASSWORD
+env-values 12345 OBSIDIAN_PASSWORD
 # → OBSIDIAN_PASSWORD=<redacted: sensitive name>
 ```
 
@@ -202,7 +202,7 @@ Even if a variable has an innocent name, the value gets redacted when it matches
 
 The patterns are heuristics, not guarantees. They err toward redacting more (acceptable — opt out per-name via `--unsafe-show NAME` with audit trail).
 
-To extend: edit the constants in `_secret_heuristics.py` (`SENSITIVE_NAME_PATTERN`, `KNOWN_SECRET_VALUE_PATTERNS`, or the threshold constants). **Whitelist-additions only** — never remove an existing keyword or pattern, since that would silently widen exposure. After every edit, run `python3 _test_heuristics.py` from the `scripts/` dir; tests cover both axes and the combined `redaction_reason` entry point.
+To extend: edit the constants in `lib/_secret_heuristics.py` (`SENSITIVE_NAME_PATTERN`, `KNOWN_SECRET_VALUE_PATTERNS`, or the threshold constants). **Whitelist-additions only** — never remove an existing keyword or pattern, since that would silently widen exposure. After every edit, run `python3 lib/_test_heuristics.py` from the plugin root; tests cover both axes and the combined `redaction_reason` entry point.
 
 The redaction placeholder names *which axis* fired: `<redacted: sensitive name>` vs `<redacted: sensitive value>` — useful for understanding why a value was held back.
 
@@ -221,7 +221,7 @@ Residual bypass surfaces:
 
 ## Extending the helpers
 
-If you need a new probe operation, add it as a new script in `${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/` with:
+If you need a new probe operation, add it as a new executable in the plugin's `bin/` directory (Python or shell) with:
 
 - A short module docstring at the top (what it does, credential-surface assessment).
 - Whitelist-style filtering by default; an explicit `--unsafe` opt-in only when there's a real case.

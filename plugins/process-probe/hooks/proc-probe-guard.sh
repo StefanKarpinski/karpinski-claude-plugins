@@ -7,7 +7,7 @@
 # redaction silently no-op'd) showed that any path touching them
 # without a vetted whitelist filter is a credential-exposure landmine.
 #
-# Use the ${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/ helpers instead — they redact
+# Use the  helpers instead — they redact
 # values by default and require explicit --unsafe-show opt-in for raw
 # access.
 #
@@ -62,7 +62,7 @@ These paths leak process credentials when filtered with anything less
 than a whitelist (the 2026-05-13 OBSIDIAN_PASSWORD incident is what
 this guard exists to prevent).
 
-Use the vetted helpers in ${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/ instead:
+Use the vetted helpers in  instead:
 
   env-keys <pid>                        # list var NAMES, no values
   env-values <pid> NAME...              # explicit reads, sensitive auto-redacted
@@ -72,7 +72,7 @@ Use the vetted helpers in ${CLAUDE_PLUGIN_ROOT}/skills/process-probe/scripts/ in
   fds <pid>                             # open fds, sockets summarized
   network <pid>                         # TCP/UDP connections only
 
-See ${CLAUDE_PLUGIN_ROOT}/skills/process-probe/SKILL.md for the full rationale and the
+See the process-probe SKILL.md for the full rationale and the
 sensitive-name pattern.
 
 If you have a genuine need to read /proc/<pid>/{environ,cmdline} raw

@@ -20,7 +20,7 @@ import sys
 
 # Pull in shared heuristics. The module sits beside this script.
 _HERE = os.path.dirname(os.path.realpath(__file__))
-sys.path.insert(0, _HERE)
+sys.path.insert(0, os.path.join(_HERE, "..", "lib"))
 from _secret_heuristics import redaction_reason  # noqa: E402
 
 
